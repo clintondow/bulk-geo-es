@@ -501,6 +501,7 @@ class FullTextSearchTool(BaseTool):
             parameters[0].value = fc
         except:
             arcpy.AddMessage(traceback.format_exc())
+<<<<<<< HEAD
 
 
 # import random
@@ -523,3 +524,5 @@ class FullTextSearchTool(BaseTool):
 
 
 
+=======
+>>>>>>> f578346b26d815dcf4a1483f46566563f07229a4
