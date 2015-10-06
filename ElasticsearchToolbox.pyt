@@ -9,7 +9,7 @@ class Toolbox(object):
     def __init__(self):
         self.label = "Toolbox"
         self.alias = "toolbox"
-        self.tools = [BulkTool, GeoDistanceTool]
+        self.tools = [BulkTool, GeoDistanceTool, FullTextSearchTool]
 
 
 class BulkTool(object):
@@ -28,7 +28,7 @@ class BulkTool(object):
                                    parameterType="Required")
         es_hosts.value = "192.168.99.100"
 
-        index_type = arcpy.Parameter(name="dest", displayName="ES Index/Mapping", direction="Input",
+        index_type = arcpy.Parameter(name="dest", displayName="ES Index/Type", direction="Input",
                                      datatype="String",
                                      parameterType="Required")
         index_type.value = "miami/broadcast"
@@ -166,14 +166,14 @@ class BulkTool(object):
         field_list_len = len(field_list)
         with arcpy.da.SearchCursor(orig, field_list) as cursor:
             for row in cursor:
+                object_id = row[1]
                 body.append({
                     "index": {
-                        "_id": row[1]
+                        "_id": object_id
                     }
                 })
-                row0 = row[0]
-                shape = [row0[0], row0[1]] if geo_point else row0.__geo_interface__
-                # arcpy.AddMessage(shape)
+                shape_field_name = row[0]
+                shape = [shape_field_name[0], shape_field_name[1]] if geo_point else shape_field_name.__geo_interface__
                 doc = {"shape": convert(shape)}
                 for index in range(2, field_list_len):
                     doc[field_list[index]] = row[index]
@@ -299,12 +299,20 @@ class GeoDistanceTool(BaseTool):
                                    direction="Input")
         es_hosts.value = "192.168.99.100"
 
+        num_records = arcpy.Parameter(displayName="Number of Records to Return",
+                                      name="num_records",
+                                      datatype="String",
+                                      parameterType="Required",
+                                      direction="Input")
+        num_records.value = "10000"
+
         shape_type = self.getParamString(name="shape_type", displayName="Shape Type", value="POINT")
         shape_type.filter.type = "ValueList"
         shape_type.filter.list = ["POINT", "POLYLINE", "POLYGON"]
 
         return [self.getParamFC(),
                 es_hosts,
+                num_records,
                 index_name,
                 type_name,
                 field_mapping,
@@ -318,18 +326,16 @@ class GeoDistanceTool(BaseTool):
         arcpy.env.overwriteOutput = True
         try:
             es_hosts = parameters[1].value
-            index_name = parameters[2].value
-            type_name = parameters[3].value
-            fms = parameters[4].value
-            radius = parameters[5].value
-            center_lon = parameters[6].value
-            center_lat = parameters[7].value
-            shape_type = parameters[8].value
+            num_records = parameters[2].value
+            index_name = parameters[3].value
+            type_name = parameters[4].value
+            fms = parameters[5].value
+            radius = parameters[6].value
+            center_lon = parameters[7].value
+            center_lat = parameters[8].value
+            shape_type = parameters[9].value
 
             spref = arcpy.SpatialReference(4326)
-
-            # fc = os.path.join(arcpy.env.scratchGDB, name)
-            # ws = os.path.dirname(fc)
 
             name = index_name if len(type_name) == 0 else index_name + "_" + type_name
             ws = "in_memory"
@@ -344,7 +350,7 @@ class GeoDistanceTool(BaseTool):
                 fields.append(field.name)
 
             search_body = {
-                "size": 10000,
+                "size": num_records,
                 "_source": source,
                 "query": {
                     "filtered": {
@@ -382,3 +388,138 @@ class GeoDistanceTool(BaseTool):
             parameters[0].value = fc
         except:
             arcpy.AddMessage(traceback.format_exc())
+
+
+class FullTextSearchTool(BaseTool):
+    def __init__(self):
+        super(FullTextSearchTool, self).__init__()
+        self.label = "Full Text Search"
+        self.description = "Perform a full text search on a specified field in a feature class."
+        self.canRunInBackground = False
+        self.es = Elasticsearch(hosts="192.168.99.100")
+
+    def getParameterInfo(self):
+        field_mapping = arcpy.Parameter(displayName="Fields",
+                                        name="field_mappings",
+                                        datatype="Field Mappings",
+                                        parameterType="Required",
+                                        direction="Input")
+
+        index_name = arcpy.Parameter(displayName="Index Name",
+                                     name="index_name",
+                                     datatype="String",
+                                     parameterType="Required",
+                                     direction="Input")
+
+        type_name = arcpy.Parameter(displayName="Type Name",
+                                    name="type_name",
+                                    datatype="String",
+                                    parameterType="Optional",
+                                    direction="Input")
+
+        search_field = arcpy.Parameter(displayName="Search Field",
+                                       name="search_field",
+                                       datatype="String",
+                                       parameterType="Required",
+                                       direction="Input")
+
+        search_text = arcpy.Parameter(displayName="Search Text",
+                                      name="search_text",
+                                      datatype="String",
+                                      parameterType="Required",
+                                      direction="Input")
+
+        es_hosts = arcpy.Parameter(displayName="ES Host(s)",
+                                   name="es_hosts",
+                                   datatype="String",
+                                   parameterType="Required",
+                                   direction="Input")
+        es_hosts.value = "192.168.99.100"
+
+        shape_type = self.getParamString(name="shape_type", displayName="Shape Type", value="POINT")
+        shape_type.filter.type = "ValueList"
+        shape_type.filter.list = ["POINT", "POLYLINE", "POLYGON"]
+
+        return [self.getParamFC(),
+                es_hosts,
+                index_name,
+                type_name,
+                search_field,
+                field_mapping,
+                search_text,
+                shape_type
+                ]
+
+    def execute(self, parameters, messages):
+        arcpy.env.overwriteOutput = True
+        try:
+            es_hosts = parameters[1].value
+            index_name = parameters[2].value
+            type_name = parameters[3].value
+            search_field = parameters[4].value
+            fms = parameters[5].value
+            search_text = parameters[6].value
+            shape_type = parameters[7].value
+
+            spref = arcpy.SpatialReference(4326)
+
+            name = index_name if len(type_name) == 0 else index_name + "_" + type_name
+            ws = "in_memory"
+            fc = ws + "/" + name
+
+            source = ['shape']
+            fields = ['SHAPE@']
+            arcpy.CreateFeatureclass_management(ws, name, shape_type, spatial_reference=spref)
+            for field in fms.fields:
+                arcpy.AddField_management(fc, field.name, field.type, field.precision, field.scale, field.length)
+                source.append(field.name)
+                fields.append(field.name)
+
+            search_body = {
+                "size": 10000,
+                "query": {
+                    "match": {
+                        search_field: search_text
+                    }
+                }
+            }
+
+            es = Elasticsearch(hosts=es_hosts.split(','), timeout=60)
+            with arcpy.da.InsertCursor(fc, fields) as cursor:
+                doc = es.search(index=index_name, doc_type=type_name, body=search_body)
+                for hit in doc['hits']['hits']:
+                    src = hit["_source"]
+                    score = hit["_score"]
+                    row = [arcpy.AsShape(src["shape"])]
+                    for field in fms.fields:
+                        if field.name in src:
+                            row.append(src[field.name])
+                        else:
+                            row.append(score)
+                    cursor.insertRow(row)
+                del doc
+            parameters[0].value = fc
+        except:
+            arcpy.AddMessage(traceback.format_exc())
+
+
+# import random
+#
+# text_to_search = {'rock': ['music', 'collecting', 'climbing'],
+#                   'tree': ['climbing', 'planting'],
+#                   'dance': ['music', 'lessons'],
+#                   'piano': ['music', 'lessons'],
+#                   'painting': ['lessons', 'collecting']
+#                   }
+#
+# with arcpy.da.UpdateCursor(r'C:\Users\clin8331\Documents\Datasets\AIS.SampleData\Miami.gdb\point_dist_output', 'TOSEARCH') as cursor:
+#     for row in cursor:
+#         key = random.choice(text_to_search.keys())
+#         val = random.choice(text_to_search[key])
+#         to_set = 'I enjoy %s %s' % (key, val)
+#         row[0] = to_set
+#         cursor.updateRow(row)
+
+
+
+
